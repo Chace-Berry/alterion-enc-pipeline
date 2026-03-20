@@ -5,20 +5,44 @@
 //! and every encrypted request is transparently decrypted, and every response re-encrypted,
 //! using the RSA + AES-256-GCM + HMAC-SHA256 pipeline.
 //!
-//! ## Layout
-//! ```text
-//! alterion_enc_pipeline
-//! ├── keystore      — RSA-2048 key store with timed rotation and grace-window overlap
-//! ├── interceptor   — Actix-web middleware (main public API)
-//! └── tools
-//!     ├── crypt     — AES-256-GCM, Argon2id password hashing, Argon2id KDF
-//!     ├── serializer— MessagePack serialisation, Deflate compression, signed-response builder
-//!     └── helper
-//!         ├── hmac  — HMAC-SHA256 sign / constant-time verify
-//!         ├── sha2  — SHA-256 raw bytes, hex, string, and file helpers
-//!         └── pstore— Pepper versioning via the Linux user-session keyring
+//! ## Example
+//!
+//! ```rust,no_run
+//! use alterion_enc_pipeline::{init_key_store, start_rotation};
+//! use alterion_enc_pipeline::interceptor::{Interceptor, DecryptedBody};
+//! use actix_web::{web, App, HttpServer, HttpRequest, HttpMessage, HttpResponse, post, get};
+//!
+//! #[post("/api/example")]
+//! async fn example_handler(req: HttpRequest) -> HttpResponse {
+//!     let body = match req.extensions().get::<DecryptedBody>().cloned() {
+//!         Some(b) => b,
+//!         None    => return HttpResponse::BadRequest().body("missing encrypted body"),
+//!     };
+//!     // body.0 is the raw decrypted bytes — deserialise however you like
+//!     HttpResponse::Ok().json(serde_json::json!({ "ok": true }))
+//! }
+//!
+//! #[actix_web::main]
+//! async fn main() -> std::io::Result<()> {
+//!     // Rotate RSA keys every hour; keep the previous key live for 5 minutes.
+//!     let store = init_key_store(3600);
+//!     start_rotation(store.clone(), 3600);
+//!
+//!     HttpServer::new(move || {
+//!         App::new()
+//!             .wrap(Interceptor { key_store: store.clone() })
+//!             .service(example_handler)
+//!     })
+//!     .bind("0.0.0.0:8080")?
+//!     .run()
+//!     .await
+//! }
 //! ```
 
 pub mod interceptor;
-pub mod keystore;
 pub mod tools;
+
+pub use alterion_rsa_key_manager::{
+    KeyStore, KeyEntry, RsaError,
+    init_key_store, start_rotation, get_current_public_key, decrypt,
+};
